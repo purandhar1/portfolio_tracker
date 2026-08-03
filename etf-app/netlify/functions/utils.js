@@ -1,4 +1,8 @@
-// Utilities for ETF calculations and fetching
+// ============================================================
+// Netlify Function: utils.js (shared helpers)
+// ES Module syntax — compatible with "type": "module"
+// ============================================================
+
 function calculateSMA(closes, period) {
     if (closes.length < period) return null;
     const slice = closes.slice(-period);
@@ -27,7 +31,7 @@ function get52WeekLow(lows) {
     return Math.min(...lows);
 }
 
-async function fetchETFData(yahooSymbol) {
+export async function fetchETFData(yahooSymbol) {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1y`;
 
     try {
@@ -83,7 +87,6 @@ async function fetchETFData(yahooSymbol) {
         const week52Low = get52WeekLow(lowPrices);
         const rsi = calculateRSI(closePrices, 14);
 
-        // Calculate derived metrics
         const ma20Change = ma20 ? ((ma20 - cmp) / cmp) * 100 : null;
         const distTo52WLow = week52Low ? ((cmp - week52Low) / week52Low) * 100 : null;
 
@@ -108,7 +111,3 @@ async function fetchETFData(yahooSymbol) {
         };
     }
 }
-
-module.exports = {
-    fetchETFData
-};

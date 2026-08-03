@@ -1,10 +1,11 @@
-const { fetchETFData } = require('./utils');
+import { fetchETFData } from './utils.js';
 
-exports.handler = async (event, context) => {
+export const handler = async (event, context) => {
     if (event.httpMethod !== 'POST') {
         return {
             statusCode: 405,
-            body: JSON.stringify({ error: 'Method Not Allowed' })
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            body: JSON.stringify({ error: 'Method Not Allowed' }),
         };
     }
 
@@ -15,11 +16,8 @@ exports.handler = async (event, context) => {
         if (!symbols || !Array.isArray(symbols)) {
             return {
                 statusCode: 400,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                body: JSON.stringify({ error: 'symbols array required in body' })
+                headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+                body: JSON.stringify({ error: 'symbols array required in body' }),
             };
         }
 
@@ -37,10 +35,7 @@ exports.handler = async (event, context) => {
 
         return {
             statusCode: 200,
-            headers: {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
             body: JSON.stringify({
                 success: true,
                 total: symbols.length,
@@ -48,16 +43,13 @@ exports.handler = async (event, context) => {
                 failed: failed.length,
                 failedSymbols: failed.map(f => f.yahooSymbol),
                 data: successful,
-            })
+            }),
         };
     } catch (error) {
         return {
             statusCode: 500,
-            headers: {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            body: JSON.stringify({ success: false, error: error.message })
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            body: JSON.stringify({ success: false, error: error.message }),
         };
     }
 };
