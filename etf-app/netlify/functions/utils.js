@@ -12,15 +12,24 @@ function calculateSMA(closes, period) {
 
 function calculateRSI(closes, period = 14) {
     if (closes.length < period + 1) return null;
-    let gains = 0;
-    let losses = 0;
-    for (let i = 1; i <= period; i++) {
-        const change = closes[closes.length - i] - closes[closes.length - i - 1];
-        if (change > 0) gains += change;
-        else losses += Math.abs(change);
+    const diffs = [];
+    for (let i = 1; i < closes.length; i++) {
+        diffs.push(closes[i] - closes[i - 1]);
     }
-    const avgGain = gains / period;
-    const avgLoss = losses / period;
+    const gains = diffs.map((diff) => (diff > 0 ? diff : 0));
+    const losses = diffs.map((diff) => (diff < 0 ? Math.abs(diff) : 0));
+    if (gains.length < period) return null;
+
+    const firstAvgGain = gains.slice(0, period).reduce((sum, g) => sum + g, 0) / period;
+    const firstAvgLoss = losses.slice(0, period).reduce((sum, l) => sum + l, 0) / period;
+    let avgGain = firstAvgGain;
+    let avgLoss = firstAvgLoss;
+
+    for (let i = period; i < gains.length; i++) {
+        avgGain = (avgGain * (period - 1) + gains[i]) / period;
+        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+    }
+
     if (avgLoss === 0) return 100;
     const rs = avgGain / avgLoss;
     return 100 - 100 / (1 + rs);
@@ -87,7 +96,9 @@ export async function fetchETFData(yahooSymbol) {
         const week52Low = get52WeekLow(lowPrices);
         const rsi = calculateRSI(closePrices, 14);
 
-        const ma20Change = ma20 ? ((ma20 - cmp) / cmp) * 100 : null;
+        // Percent difference: (CMP - MA20) / MA20 * 100
+        // Negative when CMP is below MA20 — larger negative = farther below
+        const ma20Change = ma20 ? ((cmp - ma20) / ma20) * 100 : null;
         const distTo52WLow = week52Low ? ((cmp - week52Low) / week52Low) * 100 : null;
 
         return {

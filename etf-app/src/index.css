@@ -1,1 +1,43 @@
 body { margin: 0; padding: 0; }
+
+/* Mobile / small-screen responsive tweaks for tables and layout */
+.app-root {
+	box-sizing: border-box;
+}
+
+.app-root table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.app-root th,
+.app-root td {
+	/* allow wrapping on small screens */
+	white-space: normal !important;
+}
+
+@media (max-width: 640px) {
+	.app-root {
+		padding: 12px !important;
+	}
+
+	.app-root table {
+		font-size: 0.82rem !important;
+	}
+
+	.app-root th,
+	.app-root td {
+		padding: 8px 6px !important;
+	}
+
+	/* Reduce header sizes for mobile */
+	.app-root h3 {
+		font-size: 1rem !important;
+		margin-bottom: 6px !important;
+	}
+
+	.app-root .tableContainer {
+		padding: 12px !important;
+		border-radius: 10px !important;
+	}
+}
