@@ -21,3 +21,6 @@ Thumbs.db
 
 # Vite
 *.local
+
+# Local Netlify folder
+.netlify

@@ -44,11 +44,18 @@ export async function fetchETFData(yahooSymbol) {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1y`;
 
     try {
+        // Add a timeout to avoid hanging the Netlify function
+        const controller = new AbortController();
+        const timeoutMs = 8000; // 8s per-request timeout
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
         const response = await fetch(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             },
+            signal: controller.signal,
         });
+        clearTimeout(timeout);
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);

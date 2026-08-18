@@ -23,11 +23,25 @@ export const handler = async (event, context) => {
 
         console.log(`[${new Date().toLocaleTimeString()}] Batch fetching ${symbols.length} ETFs`);
 
+        // Fetch in concurrent batches to avoid long sequential execution
+        const chunkSize = 8; // tune this for concurrency vs rate-limits
         const results = [];
-        for (const symbol of symbols) {
-            const data = await fetchETFData(symbol);
-            results.push(data);
-            await new Promise(r => setTimeout(r, 300));
+
+        function chunkArray(arr, size) {
+            const chunks = [];
+            for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+            return chunks;
+        }
+
+        const batches = chunkArray(symbols, chunkSize);
+        for (const batch of batches) {
+            const settled = await Promise.allSettled(batch.map(s => fetchETFData(s)));
+            for (const s of settled) {
+                if (s.status === 'fulfilled') results.push(s.value);
+                else results.push({ success: false, yahooSymbol: null, error: s.reason?.message || String(s.reason) });
+            }
+            // small delay between batches to be polite to upstream
+            await new Promise(r => setTimeout(r, 250));
         }
 
         const successful = results.filter(r => r.success);
