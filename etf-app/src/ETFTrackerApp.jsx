@@ -249,6 +249,7 @@ function loadPortfolioFromStorage() {
 function savePortfolioToStorage(portfolioObj) {
   try {
     localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(portfolioObj));
+    console.debug('[Portfolio] saved to storage', PORTFOLIO_STORAGE_KEY, portfolioObj);
   } catch (error) {
     console.warn('Unable to save portfolio to storage:', error.message);
   }
@@ -956,14 +957,15 @@ export default function ETFTrackerApp() {
     };
   }, [portfolio]);
 
-  const refreshPortfolioPrices = async () => {
-    if (!((portfolio.holdings || []).length)) return;
+  const refreshPortfolioPrices = async (sourcePortfolio) => {
+    const portfolioRef = sourcePortfolio || portfolio;
+    if (!((portfolioRef.holdings || []).length)) return;
     setPortfolioLoading(true);
     setPortfolioError('');
 
     try {
       const updatedHoldings = [];
-      for (const holding of (portfolio.holdings || [])) {
+      for (const holding of (portfolioRef.holdings || [])) {
         let ticker = normalizeTicker(holding.ticker);
         // derive quantity and cost basis from transactions if present (transactions-based holdings)
         let quantity = Number(holding.quantity) || 0;
@@ -1016,7 +1018,31 @@ export default function ETFTrackerApp() {
         await new Promise((resolve) => setTimeout(resolve, 180));
       }
 
-      const next = { ...portfolio, holdings: updatedHoldings };
+      // Merge with any saved portfolio to avoid overwriting recent user changes
+      const saved = loadPortfolioFromStorage();
+      if (saved && Array.isArray(saved.holdings) && saved.holdings.length) {
+        for (let i = 0; i < updatedHoldings.length; i += 1) {
+          const uh = updatedHoldings[i];
+          const match = (saved.holdings || []).find((s) => (s.id && s.id === uh.id) || normalizeTicker(s.ticker) === normalizeTicker(uh.ticker));
+          if (match && Array.isArray(match.transactions) && match.transactions.length > (uh.transactions || []).length) {
+            // prefer the saved transactions (they are likely newer) and recompute derived fields
+            uh.transactions = match.transactions;
+            const quantity = uh.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.quantity) : -Number(t.quantity)), 0);
+            const costBasis = uh.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.price) * Number(t.quantity) : -Number(t.price) * Number(t.quantity)), 0);
+            uh.quantity = quantity;
+            uh.costBasis = costBasis;
+            const currentPrice = Number(uh.currentPrice) || 0;
+            uh.currentValue = currentPrice * quantity;
+            uh.pnl = uh.currentValue - costBasis;
+            uh.pnlPercent = costBasis ? (uh.pnl / costBasis) * 100 : 0;
+            uh.buyDate = uh.buyDate || match.buyDate;
+            uh.name = uh.name || match.name;
+            uh.note = uh.note || match.note;
+          }
+        }
+      }
+
+      const next = { ...portfolioRef, holdings: updatedHoldings };
       setPortfolio(next);
       savePortfolioToStorage(next);
       setPortfolioRefreshTime(new Date());
@@ -1058,43 +1084,75 @@ export default function ETFTrackerApp() {
 
     setIsSubmitting(true);
 
-    const baseHolding = {
-      id: `${Date.now()}-${ticker}`,
-      name: formState.name.trim() || ticker,
-      ticker,
-      type: formState.type,
-      note: formState.note.trim(),
-      transactions: [
-        { type: 'buy', price: buyPrice, quantity, date: formState.buyDate || new Date().toISOString().split('T')[0] },
-      ],
-      buyDate: formState.buyDate || new Date().toISOString().split('T')[0],
-      costBasis: buyPrice * quantity,
-      quantity: quantity,
-      currentPrice: null,
-      currentValue: null,
-      pnl: null,
-      pnlPercent: null,
-      lastUpdated: null,
-    };
+    const tx = { type: 'buy', price: buyPrice, quantity, date: formState.buyDate || new Date().toISOString().split('T')[0] };
 
     const quote = await fetchTickerData(ticker);
-    if (quote?.success) {
-      const currentPrice = quote.cmp || 0;
-      const currentValue = currentPrice * quantity;
-      const pnl = currentValue - baseHolding.costBasis;
-      const pnlPercent = baseHolding.costBasis ? (pnl / baseHolding.costBasis) * 100 : 0;
-      baseHolding.currentPrice = currentPrice;
-      baseHolding.currentValue = currentValue;
-      baseHolding.pnl = pnl;
-      baseHolding.pnlPercent = pnlPercent;
-      baseHolding.lastUpdated = new Date().toISOString();
-    } else if (quote) {
-      setPortfolioError(`Warning: ${quote.error || 'Unable to fetch ticker price.'}`);
-    }
 
-    const updatedPortfolio = { ...portfolio, holdings: [...(portfolio.holdings || []), baseHolding] };
-    setPortfolio(updatedPortfolio);
-    savePortfolioToStorage(updatedPortfolio);
+    // If a holding with the same ticker already exists, merge this buy into it
+    const existingIndex = (portfolio.holdings || []).findIndex((h) => normalizeTicker(h.ticker) === ticker);
+    if (existingIndex !== -1) {
+      const existing = (portfolio.holdings || [])[existingIndex];
+      const updated = { ...existing };
+      updated.transactions = Array.isArray(updated.transactions) ? [...updated.transactions, tx] : [tx];
+
+      // recompute quantity and costBasis from transactions
+      const totalQty = updated.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.quantity) : -Number(t.quantity)), 0);
+      const totalCost = updated.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.price) * Number(t.quantity) : -Number(t.price) * Number(t.quantity)), 0);
+      updated.quantity = totalQty;
+      updated.costBasis = totalCost;
+
+      // update pricing fields if quote available
+      if (quote?.success) {
+        const currentPrice = quote.cmp || 0;
+        updated.currentPrice = currentPrice;
+      }
+      const currentPriceVal = Number(updated.currentPrice) || 0;
+      updated.currentValue = currentPriceVal * Number(updated.quantity || 0);
+      updated.pnl = updated.currentValue - Number(updated.costBasis || 0);
+      updated.pnlPercent = updated.costBasis ? (updated.pnl / Number(updated.costBasis)) * 100 : 0;
+      updated.lastUpdated = new Date().toISOString();
+
+      const nextHoldings = [...(portfolio.holdings || [])];
+      nextHoldings[existingIndex] = updated;
+      const updatedPortfolio = { ...portfolio, holdings: nextHoldings };
+      setPortfolio(updatedPortfolio);
+      savePortfolioToStorage(updatedPortfolio);
+    } else {
+      const baseHolding = {
+        id: `${Date.now()}-${ticker}`,
+        name: formState.name.trim() || ticker,
+        ticker,
+        type: formState.type,
+        note: formState.note.trim(),
+        transactions: [tx],
+        buyDate: formState.buyDate || new Date().toISOString().split('T')[0],
+        costBasis: buyPrice * quantity,
+        quantity: quantity,
+        currentPrice: null,
+        currentValue: null,
+        pnl: null,
+        pnlPercent: null,
+        lastUpdated: null,
+      };
+
+      if (quote?.success) {
+        const currentPrice = quote.cmp || 0;
+        const currentValue = currentPrice * quantity;
+        const pnl = currentValue - baseHolding.costBasis;
+        const pnlPercent = baseHolding.costBasis ? (pnl / baseHolding.costBasis) * 100 : 0;
+        baseHolding.currentPrice = currentPrice;
+        baseHolding.currentValue = currentValue;
+        baseHolding.pnl = pnl;
+        baseHolding.pnlPercent = pnlPercent;
+        baseHolding.lastUpdated = new Date().toISOString();
+      } else if (quote) {
+        setPortfolioError(`Warning: ${quote.error || 'Unable to fetch ticker price.'}`);
+      }
+
+      const updatedPortfolio = { ...portfolio, holdings: [...(portfolio.holdings || []), baseHolding] };
+      setPortfolio(updatedPortfolio);
+      savePortfolioToStorage(updatedPortfolio);
+    }
     setFormState({
       name: '',
       ticker: '',
@@ -1216,14 +1274,14 @@ export default function ETFTrackerApp() {
 
   const handleAverageBuy = (id) => {
     const existing = (portfolio.holdings || []).find((h) => h.id === id);
+    console.debug('[Portfolio] handleAverageBuy invoked for id', id, 'found', existing);
     if (!existing) return;
     setAvgModal({ open: true, id, price: '', qty: '', date: new Date().toISOString().split('T')[0] });
   };
 
   const submitAverage = async () => {
     const { id, price, qty, date } = avgModal;
-    const existing = (portfolio.holdings || []).find((h) => h.id === id);
-    if (!existing) return setAvgModal({ open: false, id: null, price: '', qty: '', date: new Date().toISOString().split('T')[0] });
+    console.debug('[Portfolio] submitAverage called', avgModal);
     const p = Number(price);
     const q = Number(qty);
     const d = date || new Date().toISOString().split('T')[0];
@@ -1232,19 +1290,47 @@ export default function ETFTrackerApp() {
       return;
     }
     const tx = { type: 'buy', price: p, quantity: q, date: d };
-    const updated = { ...existing };
-    updated.transactions = Array.isArray(updated.transactions) ? [...updated.transactions, tx] : [tx];
-    // recompute quantity and costBasis
-    const totalQty = updated.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.quantity) : -Number(t.quantity)), 0);
-    const totalCost = updated.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.price) * Number(t.quantity) : -Number(t.price) * Number(t.quantity)), 0);
-    updated.quantity = totalQty;
-    updated.costBasis = totalCost;
-    const nextHoldings = (portfolio.holdings || []).map((h) => (h.id === id ? updated : h));
-    const next = { ...portfolio, holdings: nextHoldings };
-    setPortfolio(next);
-    savePortfolioToStorage(next);
+
+    // Use functional updater to avoid stale closures and ensure latest portfolio state
+    setPortfolio((prevPortfolio) => {
+      const existing = (prevPortfolio.holdings || []).find((h) => h.id === id);
+      if (!existing) return prevPortfolio;
+
+      const updated = { ...existing };
+      updated.transactions = Array.isArray(updated.transactions) ? [...updated.transactions, tx] : [tx];
+
+      // recompute quantity and costBasis
+      const totalQty = updated.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.quantity) : -Number(t.quantity)), 0);
+      const totalCost = updated.transactions.reduce((s, t) => s + (t.type === 'buy' ? Number(t.price) * Number(t.quantity) : -Number(t.price) * Number(t.quantity)), 0);
+      updated.quantity = totalQty;
+      updated.costBasis = totalCost;
+
+      // Recompute derived fields immediately so UI reflects the new average even if backend pricing fails
+      const currentPrice = Number(updated.currentPrice) || Number(existing.currentPrice) || 0;
+      const currentValue = currentPrice * Number(updated.quantity || 0);
+      const pnl = currentValue - Number(updated.costBasis || 0);
+      const pnlPercent = updated.costBasis ? (pnl / Number(updated.costBasis)) * 100 : 0;
+      const daysHeld = updated.transactions && updated.transactions.length > 0
+        ? daysBetween(updated.transactions[0].date)
+        : updated.buyDate ? daysBetween(updated.buyDate) : null;
+
+      updated.currentPrice = currentPrice;
+      updated.currentValue = currentValue;
+      updated.pnl = pnl;
+      updated.pnlPercent = pnlPercent;
+      updated.daysHeld = daysHeld;
+      updated.lastUpdated = new Date().toISOString();
+
+      const nextHoldings = (prevPortfolio.holdings || []).map((h) => (h.id === id ? updated : h));
+      const next = { ...prevPortfolio, holdings: nextHoldings };
+      savePortfolioToStorage(next);
+      console.debug('[Portfolio] after average saved', nextHoldings.find((h) => h.id === id));
+      return next;
+    });
+
     setAvgModal({ open: false, id: null, price: '', qty: '', date: new Date().toISOString().split('T')[0] });
-    await refreshPortfolioPrices();
+    const stored = loadPortfolioFromStorage();
+    await refreshPortfolioPrices(stored);
   };
 
   useEffect(() => {
